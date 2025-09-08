@@ -13,8 +13,10 @@ const USER_STATE_FILE = "./data/userState.json";
 const app = express();
 const logger = pino(pinoPretty());
 
+// Настройка CORS
 app.use(cors());
 
+// Middleware для обработки JSON-запросов
 app.use(
   bodyParser.json({
     type(req) {
@@ -23,11 +25,13 @@ app.use(
   })
 );
 
+// Middleware для установки заголовка Content-Type
 app.use((req, res, next) => {
   res.setHeader("Content-Type", "application/json");
   next();
 });
 
+// Массив для хранения состояния пользователей
 let userState = [];
 
 // Коллекция для хранения таймеров удаления пользователей
@@ -44,6 +48,9 @@ try {
   logger.error("Error loading userState from file: " + error.message);
 }
 
+/**
+ * Функция для сохранения состояния пользователей в файл
+ */
 function saveUserState() {
   try {
     fs.writeFileSync(USER_STATE_FILE, JSON.stringify(userState, null, 2));
@@ -53,25 +60,43 @@ function saveUserState() {
   }
 }
 
-// Функция для планирования удаления пользователя через 1 минуту
+/**
+ * Функция для отправки обновленного состояния пользователей всем подключенным клиентам
+ */
+function broadcastUserState() {
+  const userStateMessage = JSON.stringify(userState);
+  [...wsServer.clients]
+    .filter((client) => client.readyState === WebSocket.OPEN)
+    .forEach((client) => client.send(userStateMessage));
+  logger.info("Broadcasted updated userState to all clients");
+}
+
+/**
+ * Функция для расписания удаления пользователя
+ * @param {string} userId - Идентификатор пользователя
+ */
 function scheduleDeletion(userId) {
-  // Cancel any existing timer for this user
   if (deletionTimers.has(userId)) {
     clearTimeout(deletionTimers.get(userId));
   }
-  // Set new timer
+
   deletionTimers.set(userId, setTimeout(() => {
     const idx = userState.findIndex(user => user.id === userId);
     if (idx !== -1) {
       userState.splice(idx, 1);
       saveUserState();
+      // Обновление состояния пользователя после удаления
+      broadcastUserState();
       logger.info(`User ${userId} deleted after 1 minute timeout`);
     }
     deletionTimers.delete(userId);
-  }, 30000)); // 30 seconds
+  }, 10000)); // 10 секунд
 }
 
-// Function to cancel deletion timer
+/**
+ * Функция для отмены расписания удаления пользователя
+ * @param {string} userId - Идентификатор пользователя
+ */
 function cancelDeletion(userId) {
   if (deletionTimers.has(userId)) {
     clearTimeout(deletionTimers.get(userId));
@@ -80,9 +105,10 @@ function cancelDeletion(userId) {
   }
 }
 
-// Track connected users by WebSocket connection
+// Коллекция для хранения подключенных пользователей
 const connectedUsers = new Map();
 
+// Обработчик запросов на создание нового пользователя
 app.post("/new-user", async (request, response) => {
   if (Object.keys(request.body).length === 0) {
     const result = {
@@ -104,6 +130,9 @@ app.post("/new-user", async (request, response) => {
     userState.push(newUser);
     saveUserState();
 
+    // Broadcast updated userState to all clients
+    broadcastUserState();
+
     const result = {
       status: "ok",
       user: newUser,
@@ -122,20 +151,22 @@ app.post("/new-user", async (request, response) => {
   }
 });
 
+// Создание HTTP-сервера
 const server = http.createServer(app);
 const wsServer = new WebSocketServer({ server });
 wsServer.on("connection", (ws) => {
   let currentUserId = null;
 
+  // Обработка подключения пользователя
   ws.on("message", (msg, isBinary) => {
     const receivedMSG = JSON.parse(msg);
 
     logger.info(`Message received: ${JSON.stringify(receivedMSG)}`);
 
-    // Set currentUserId if message has user
+    // Обновление состояния пользователя
     if (receivedMSG.user && receivedMSG.user.id) {
       currentUserId = receivedMSG.user.id;
-      // Cancel any pending deletion since user is active
+      // Отмена всех ожидающих удалений, так как пользователь активен
       cancelDeletion(currentUserId);
     }
 
@@ -171,6 +202,7 @@ wsServer.on("connection", (ws) => {
     }
   });
 
+  // Обработка закрытия соединения
   ws.on("close", () => {
     if (currentUserId) {
       scheduleDeletion(currentUserId);
@@ -190,12 +222,13 @@ wsServer.on("connection", (ws) => {
 
 const port = process.env.PORT || 3000;
 
-// Конечная точка API для проверки подлинности пользователя
+// Обработка запросов на проверку пользователя
 app.post("/verify-user", (req, res) => {
   const { id, name } = req.body;
-  const userExists = userState.some(
-    (user) => user.id === id && user.name === name
-  );
+  const userExists = userState.some((user) => {
+    return user.id === id && user.name === name;
+  });
+
   if (userExists) {
     res.json({ status: "ok" });
   } else {
@@ -203,6 +236,7 @@ app.post("/verify-user", (req, res) => {
   }
 });
 
+// Запуск сервера
 const bootstrap = async () => {
   try {
     server.listen(port, () =>
