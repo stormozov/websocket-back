@@ -34,6 +34,9 @@ app.use((req, res, next) => {
 // Массив для хранения состояния пользователей
 let userState = [];
 
+// Массив для хранения сообщений
+let messages = [];
+
 // Коллекция для хранения таймеров удаления пользователей
 const deletionTimers = new Map();
 
@@ -177,9 +180,9 @@ wsServer.on("connection", (ws) => {
         connectedUsers.delete(ws);
       }
 
-      [...wsServer.clients]
-        .filter((o) => o.readyState === WebSocket.OPEN)
-        .forEach((o) => o.send(JSON.stringify(userState)));
+  [...wsServer.clients]
+    .filter((o) => o.readyState === WebSocket.OPEN)
+    .forEach((o) => o.send(JSON.stringify(userState)));
 
       logger.info(`User exit scheduled for deletion: ${receivedMSG.user ? receivedMSG.user.name : 'unknown'}`);
       return;
@@ -187,6 +190,7 @@ wsServer.on("connection", (ws) => {
 
     // обработка отправки сообщения
     if (receivedMSG.type === "send") {
+      messages.push(receivedMSG);
       [...wsServer.clients]
         .filter((o) => o.readyState === WebSocket.OPEN)
         .forEach((o) => o.send(msg, { binary: isBinary }));
@@ -198,6 +202,10 @@ wsServer.on("connection", (ws) => {
         currentUserId = receivedMSG.user.id;
         cancelDeletion(currentUserId);
         logger.info(`User joined: ${receivedMSG.user.name}`);
+        // Отправить историю сообщений новому пользователю
+        if (messages.length > 0) {
+          ws.send(JSON.stringify({ type: 'messages', messages }));
+        }
       }
     }
   });
