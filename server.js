@@ -190,10 +190,11 @@ wsServer.on("connection", (ws) => {
 
     // обработка отправки сообщения
     if (receivedMSG.type === "send") {
+      receivedMSG.timestamp = Date.now();
       messages.push(receivedMSG);
       [...wsServer.clients]
         .filter((o) => o.readyState === WebSocket.OPEN)
-        .forEach((o) => o.send(msg, { binary: isBinary }));
+        .forEach((o) => o.send(JSON.stringify(receivedMSG)));
       logger.info("Message sent to all users");
     }
 
